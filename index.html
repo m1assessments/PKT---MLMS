@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Mobile Assessment</title>
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --primary: #673ab7;
+      --bg: #f0ebf8;
+      --text: #202124;
+      --subtext: #5f6368;
+      --error: #d32f2f;
+      --success: #2e7d32;
+      --card-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+    }
+    body { background-color: var(--bg); font-family: 'Roboto', sans-serif; color: var(--text); line-height: 1.6; }
+    .container { width: 100%; max-width: 680px; margin: 0 auto; padding: 12px; }
+    .card { background: #ffffff; border: 1px solid #dadce0; border-radius: 8px; margin-bottom: 16px; padding: 24px; box-shadow: var(--card-shadow); }
+    .header-card { border-top: 10px solid var(--primary); }
+    h1 { font-family: 'Google Sans', sans-serif; font-size: 30px; font-weight: 400; margin-bottom: 8px; }
+    .input-field { width: 100%; border: none; border-bottom: 1px solid #dadce0; padding: 12px 0; font-size: 16px; outline: none; background: transparent; }
+    .input-field:focus { border-bottom: 2px solid var(--primary); }
+    .btn { width: 100%; padding: 14px; border-radius: 6px; font-family: 'Google Sans', sans-serif; font-weight: 500; cursor: pointer; border: none; background-color: var(--primary); color: white; font-size: 16px; }
+    .hidden { display: none !important; }
+    #loader { position: fixed; inset: 0; background: rgba(255,255,255,0.95); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
+    .spinner { width: 45px; height: 45px; border: 4px solid #f3f3f3; border-top: 4px solid var(--primary); border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .timer-wrap { position: sticky; top: 0; z-index: 1000; background: #fff; border-bottom: 1px solid #dadce0; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+  </style>
+</head>
+<body>
+
+<div id="loader">
+  <div class="spinner"></div>
+  <p style="margin-top:15px; font-family:'Google Sans';">Preparing Form...</p>
+</div>
+
+<div id="formPage" class="container">
+  <div class="card header-card">
+    <h1>Assessment</h1>
+    <p style="color:var(--subtext)">Please fill in your details to begin.</p>
+  </div>
+  <div id="formFields"></div>
+  <button class="btn" id="startBtn" onclick="startQuiz()" style="display:none">Start Assessment</button>
+</div>
+
+<div id="quizPage" class="container hidden">
+  <div class="timer-wrap card">
+    <div><span id="timerVal" style="font-size:22px; color:var(--primary); font-weight:500;">25:00</span></div>
+    <div style="width:60%; height:8px; background:#eee; border-radius:4px; overflow:hidden;"><div id="timerFill" style="width:100%; height:100%; background:var(--primary); transition:width 1s linear;"></div></div>
+  </div>
+  <div id="quizQuestions"></div>
+  <button class="btn" onclick="submitQuiz()" style="margin-bottom:50px;">Submit Final Answers</button>
+</div>
+
+<div id="resultPage" class="container hidden"><div id="resultContent"></div></div>
+
+<script>
+  // 🔗 PASTE YOUR DEPLOYED APPS SCRIPT WEB APP URL HERE:
+  const API_URL = "https://script.google.com/macros/s/AKfycbzLf8VpaHMs0u6LPn_9ICAf_Wr294hukZst6THByoEZPA9ozFgmwotvT_BYDEmMwusm/exec";
+
+  let formConfig = [], questionsData = [], timerHandle = null, timeLeft = 1500, endTime = null, userData = {};
+
+  window.onload = () => {
+    fetch(`${API_URL}?action=getFormConfig`)
+      .then(res => res.json())
+      .then(data => {
+        formConfig = data;
+        renderInitialForm();
+        document.getElementById('loader').classList.add('hidden');
+      })
+      .catch(err => alert("Error loading config: " + err));
+  };
+
+  function renderInitialForm() {
+    const container = document.getElementById('formFields');
+    container.innerHTML = formConfig.map((f, i) => {
+      let field = '';
+      const isDependent = f[8] !== 'NONE'; 
+      
+      if (f[2] === 'dropdown') {
+        let options = '';
+        let placeholder = "Choose";
+        
+        if (!isDependent) {
+          options = f[3].split(',').map(o => `<option value="${o.trim()}">${o.trim()}</option>`).join('');
+        } else {
+          placeholder = `Select ${f[8]} First`;
+        }
+
+        field = `<select class="input-field" id="f${i}" onchange="validateField(${i}); handleDependency(this, '${f[0]}')">
+                 <option value="" disabled selected>${placeholder}</option>
+                 ${options}
+                </select>`;
+      } else {
+        field = `<input class="input-field" type="text" id="f${i}" maxlength="${f[7] || ''}" placeholder="Your answer" oninput="validateField(${i})">`;
+      }
+
+      return `<div class="card" id="container_${f[0]}">
+                <label style="display:block;margin-bottom:8px;font-weight:500;">${f[1]}</label>
+                ${field}
+                <div id="err_${i}" style="color:red; font-size:12px; margin-top:5px; display:none;"></div>
+              </div>`;
+    }).join('');
+    document.getElementById('startBtn').style.display = 'block';
+  }
+
+  function handleDependency(element, fieldId) {
+    const val = element.value;
+    formConfig.forEach((f, i) => {
+      if (f[8] === fieldId) {
+        const depSelect = document.getElementById(`f${i}`);
+        let html = '<option value="" disabled selected>Choose</option>';
+        f[3].split(',').forEach(opt => {
+          if (opt.includes(':')) {
+            const [parent, name] = opt.split(':');
+            if (parent.trim() === val) html += `<option value="${name.trim()}">${name.trim()}</option>`;
+          }
+        });
+        depSelect.innerHTML = html;
+      }
+    });
+  }
+
+  function validateField(index) {
+    const config = formConfig[index], input = document.getElementById(`f${index}`), errDiv = document.getElementById(`err_${index}`), val = input.value.trim();
+    let msg = "";
+    if (config[4] === 'YES' && !val) msg = "Required.";
+    else if (config[5] === 'NUMBER' && val && !/^\d+$/.test(val)) msg = "Numbers only.";
+    else if (config[5] === 'TEXT' && val && !/^[a-zA-Z\s]+$/.test(val)) msg = "Letters only.";
+    else if (val && config[6] && val.length < config[6]) msg = `Min ${config[6]} chars.`;
+
+    input.style.borderBottom = msg ? "2px solid red" : "1px solid #dadce0";
+    errDiv.textContent = msg;
+    errDiv.style.display = msg ? "block" : "none";
+    return !msg;
+  }
+
+  function startQuiz() {
+    let valid = true;
+    formConfig.forEach((_, i) => { if (!validateField(i)) valid = false; });
+    if (!valid) return;
+    formConfig.forEach((f, i) => userData[f[0]] = document.getElementById(`f${i}`).value);
+    document.getElementById('formPage').classList.add('hidden');
+    document.getElementById('quizPage').classList.remove('hidden');
+    document.getElementById('loader').classList.remove('hidden');
+    
+    fetch(`${API_URL}?action=getQuestions`)
+      .then(res => res.json())
+      .then(data => {
+        questionsData = data;
+        renderQuestions();
+        document.getElementById('loader').classList.add('hidden');
+        endTime = Date.now() + (timeLeft * 1000);
+        startTimer();
+      })
+      .catch(err => alert("Error loading questions: " + err));
+  }
+
+  function startTimer() {
+    updateTimerLogic();
+    timerHandle = setInterval(updateTimerLogic, 1000);
+  }
+
+  function updateTimerLogic() {
+    const now = Date.now();
+    timeLeft = Math.max(0, Math.ceil((endTime - now) / 1000));
+
+    let m = Math.floor(timeLeft / 60), s = timeLeft % 60;
+    document.getElementById('timerVal').textContent = `${m}:${s < 10 ? '0' + s : s}`;
+    document.getElementById('timerFill').style.width = (timeLeft / 1500 * 100) + '%';
+    
+    if (timeLeft <= 0) {
+      submitQuiz();
+    }
+  }
+
+  function renderQuestions() {
+    document.getElementById('quizQuestions').innerHTML = questionsData.map((q, i) => `
+      <div class="card">
+        <p style="font-weight:500; margin-bottom:15px;">${i+1}. ${q[1]}</p>
+        ${q.slice(2, 6).filter(o => o).map(o => `
+          <label style="display:flex; align-items:center; padding:10px 0; cursor:pointer;">
+            <input type="radio" name="q${i}" value="${o}" style="margin-right:10px; width:18px; height:18px;"><span>${o}</span>
+          </label>
+        `).join('')}
+      </div>`).join('');
+  }
+
+  function submitQuiz() {
+    clearInterval(timerHandle);
+    document.getElementById('loader').classList.remove('hidden');
+    
+    const ans = questionsData.map((_, i) => {
+      const sel = document.querySelector(`input[name="q${i}"]:checked`);
+      return sel ? sel.value : '';
+    });
+    
+    const totalDurationSeconds = 1500;
+    const currentRemaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+    const realTimeElapsed = totalDurationSeconds - currentRemaining;
+
+    const payload = {
+      metaData: userData,
+      answers: ans,
+      questionsData: questionsData,
+      timeTaken: realTimeElapsed
+    };
+
+    fetch(API_URL, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    })
+      .then(res => res.json())
+      .then(res => {
+        if (res.status === "success") {
+          showResult(res.data);
+        } else {
+          alert("Submission failed: " + res.message);
+        }
+      })
+      .catch(err => alert("Submission error: " + err));
+  }
+
+  function showResult(res) {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    document.getElementById('loader').classList.add('hidden');
+    document.getElementById('quizPage').classList.add('hidden');
+    document.getElementById('resultPage').classList.remove('hidden');
+    
+    const isPass = res.finalResult === 'PASS';
+    const scoreColor = isPass ? 'var(--success)' : 'var(--error)';
+    const offset = 339.29 - (339.29 * res.percentage / 100);
+    
+    let reviewHtml = '';
+    if (res.wrongAnswers && res.wrongAnswers.length > 0) {
+      reviewHtml = `<div style="margin-top:30px; text-align:left;">
+                      <h3 style="margin-bottom:15px; color:var(--text); border-bottom:2px solid #eee; padding-bottom:5px;">Review Incorrect Answers:</h3>` +
+        res.wrongAnswers.map(w => `
+          <div class="card" style="padding:15px; border-color:#eee; margin-bottom:12px; box-shadow:none; border-left: 5px solid var(--error);">
+            <p style="font-size:15px; font-weight:500; color:var(--text); margin-bottom:10px;">${w.question}</p>
+            <div style="background: #fff5f5; padding: 10px; border-radius: 4px; font-size: 14px;">
+              <div style="color:var(--error); margin-bottom:4px;">
+                <strong>Your Answer:</strong> ${w.selected}
+              </div>
+              <div style="color:var(--success)">
+                <strong>Correct Answer:</strong> ${w.correct}
+              </div>
+            </div>
+          </div>
+        `).join('') + `</div>`;
+    } else if (res.score === questionsData.length) {
+      reviewHtml = `<div class="card" style="margin-top:20px; background:#e8f5e9; color:var(--success); text-align:center; font-weight:500;">
+                      Perfect Score! You got everything right.
+                    </div>`;
+    }
+
+    document.getElementById('resultContent').innerHTML = `
+      <div class="card header-card" style="text-align:center; padding: 40px 20px;">
+        <div style="display:inline-block; position:relative; margin-bottom:20px;">
+           <svg width="120" height="120">
+              <circle cx="60" cy="60" r="54" fill="none" stroke="#eee" stroke-width="10"/>
+              <circle cx="60" cy="60" r="54" fill="none" stroke="${scoreColor}" stroke-width="10" 
+                    stroke-dasharray="339.29" stroke-dashoffset="${offset}" 
+                    style="transition: stroke-dashoffset 1s ease-out;" transform="rotate(-90 60 60)"/>
+           </svg>
+           <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:24px; font-weight:bold; color:${scoreColor}">
+              ${Math.round(res.percentage)}%
+           </div>
+        </div>
+        
+        <h1 style="color:${scoreColor}; margin-bottom:10px;">${res.finalResult}</h1>
+        
+        <div style="display: flex; justify-content: space-around; margin: 20px 0; background: #f8f9fa; padding: 15px; border-radius: 12px;">
+          <div>
+            <small style="color:var(--subtext); display:block; text-transform:uppercase; font-size:10px; letter-spacing:1px;">Score</small>
+            <strong style="font-size:18px;">${res.score} / ${questionsData.length}</strong>
+          </div>
+          <div style="border-left: 1px solid #ddd;"></div>
+          <div>
+            <small style="color:var(--subtext); display:block; text-transform:uppercase; font-size:10px; letter-spacing:1px;">Time</small>
+            <strong style="font-size:18px;">${res.timeTaken}</strong>
+          </div>
+        </div>
+        
+        ${reviewHtml}
+      </div>`;
+  }
+</script>
+</body>
+</html>
